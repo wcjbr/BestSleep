@@ -1,0 +1,353 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Optional tag name. Defaults to v<pom version>."
+        required: false
+      changelog:
+        description: "Optional release notes override. Leave empty to auto-generate."
+        required: false
+      release_type:
+        description: "Optional Modrinth release type override: release, beta, or alpha."
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build plugin
+        run: mvn -B clean package
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          GIT_SHA: ${{ github.sha }}
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+          INPUT_CHANGELOG: ${{ inputs.changelog }}
+          INPUT_RELEASE_TYPE: ${{ inputs.release_type }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import sys
+          import xml.etree.ElementTree as ET
+
+          pom = ET.parse("pom.xml")
+          root = pom.getroot()
+          ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+
+          def read_text(path: str) -> str:
+              value = root.findtext(path, namespaces=ns)
+              if value is None or not value.strip():
+                  raise SystemExit(f"Missing {path} in pom.xml")
+              return value.strip()
+
+          artifact_id = read_text("m:artifactId")
+          version = read_text("m:version")
+          project_name = root.findtext("m:name", namespaces=ns)
+          project_name = project_name.strip() if project_name and project_name.strip() else artifact_id
+
+          jars = [
+              path for path in pathlib.Path("target").glob("*.jar")
+              if not path.name.startswith("original-")
+          ]
+          if not jars:
+              raise SystemExit("No packaged jar found in target/")
+          jar_path = str(sorted(jars)[0])
+
+          event_name = os.environ["EVENT_NAME"]
+          pushed_tag = os.environ.get("REF_NAME", "").strip()
+          input_tag = os.environ.get("INPUT_TAG_NAME", "").strip()
+          tag_name = pushed_tag if event_name == "push" else (input_tag or f"v{version}")
+
+          expected_tag = f"v{version}"
+          if event_name == "push" and tag_name != expected_tag:
+              raise SystemExit(f"Tag {tag_name} does not match pom.xml version {version}. Expected {expected_tag}.")
+
+          version_lower = version.lower()
+          if version_lower.endswith("-snapshot"):
+              raise SystemExit("Refusing to publish a -SNAPSHOT version. Set a release version in pom.xml first.")
+
+          release_type = os.environ.get("INPUT_RELEASE_TYPE", "").strip().lower()
+          if not release_type:
+              if "alpha" in version_lower:
+                  release_type = "alpha"
+              elif "beta" in version_lower or "rc" in version_lower:
+                  release_type = "beta"
+              else:
+                  release_type = "release"
+
+          if release_type not in {"release", "beta", "alpha"}:
+              raise SystemExit(f"Unsupported release type: {release_type}")
+
+          prerelease = "true" if release_type in {"beta", "alpha"} else "false"
+          release_name = f"{project_name} {version}"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"artifact_id={artifact_id}\n")
+              fh.write(f"project_name={project_name}\n")
+              fh.write(f"version={version}\n")
+              fh.write(f"tag_name={tag_name}\n")
+              fh.write(f"release_name={release_name}\n")
+              fh.write(f"release_type={release_type}\n")
+              fh.write(f"prerelease={prerelease}\n")
+              fh.write(f"jar_path={jar_path}\n")
+              fh.write(f"jar_name={pathlib.Path(jar_path).name}\n")
+          PY
+
+      - name: Create or update GitHub release
+        id: gh_release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          CHANGELOG_OVERRIDE: ${{ inputs.changelog }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+          RELEASE_NAME: ${{ steps.meta.outputs.release_name }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ["REPOSITORY"]
+          token = os.environ["GITHUB_TOKEN"]
+          tag_name = os.environ["TAG_NAME"]
+          release_name = os.environ["RELEASE_NAME"]
+          target_sha = os.environ["TARGET_SHA"]
+          prerelease = os.environ["PRERELEASE"].lower() == "true"
+          changelog_override = os.environ.get("CHANGELOG_OVERRIDE", "")
+          api_root = f"https://api.github.com/repos/{repo}"
+
+          def request_json(method: str, url: str, payload=None, extra_headers=None, expect_404=False):
+              headers = {
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              }
+              if extra_headers:
+                  headers.update(extra_headers)
+              data = None
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+                  headers["Content-Type"] = "application/json"
+
+              request = urllib.request.Request(url, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      body = response.read().decode("utf-8")
+                      return None if not body else json.loads(body)
+              except urllib.error.HTTPError as exc:
+                  if expect_404 and exc.code == 404:
+                      return None
+                  message = exc.read().decode("utf-8", errors="replace")
+                  raise SystemExit(f"{method} {url} failed: {exc.code} {message}")
+
+          if changelog_override.strip():
+              body = changelog_override
+          else:
+              notes = request_json(
+                  "POST",
+                  f"{api_root}/releases/generate-notes",
+                  {
+                      "tag_name": tag_name,
+                      "target_commitish": target_sha,
+                  },
+              )
+              body = notes.get("body", "")
+              generated_name = notes.get("name", "").strip()
+              if generated_name:
+                  release_name = generated_name
+
+          existing = request_json("GET", f"{api_root}/releases/tags/{urllib.parse.quote(tag_name)}", expect_404=True)
+          payload = {
+              "tag_name": tag_name,
+              "target_commitish": target_sha,
+              "name": release_name,
+              "body": body,
+              "draft": False,
+              "prerelease": prerelease,
+          }
+
+          if existing is None:
+              release = request_json("POST", f"{api_root}/releases", payload)
+          else:
+              release = request_json("PATCH", f"{api_root}/releases/{existing['id']}", payload)
+
+          upload_url = release["upload_url"].split("{", 1)[0]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"release_id={release['id']}\n")
+              fh.write(f"upload_url={upload_url}\n")
+              fh.write(f"html_url={release['html_url']}\n")
+              fh.write(f"release_name={release['name']}\n")
+              fh.write("release_body<<EOF\n")
+              fh.write(release.get("body", ""))
+              fh.write("\nEOF\n")
+          PY
+
+      - name: Upload jar to GitHub release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.gh_release.outputs.release_id }}
+          UPLOAD_URL: ${{ steps.gh_release.outputs.upload_url }}
+          JAR_PATH: ${{ steps.meta.outputs.jar_path }}
+          JAR_NAME: ${{ steps.meta.outputs.jar_name }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import mimetypes
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ["REPOSITORY"]
+          token = os.environ["GITHUB_TOKEN"]
+          release_id = os.environ["RELEASE_ID"]
+          upload_url = os.environ["UPLOAD_URL"]
+          jar_path = os.environ["JAR_PATH"]
+          jar_name = os.environ["JAR_NAME"]
+          api_root = f"https://api.github.com/repos/{repo}"
+
+          def request_json(method: str, url: str, payload=None, expect_404=False):
+              headers = {
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              }
+              data = None
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+                  headers["Content-Type"] = "application/json"
+              request = urllib.request.Request(url, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      body = response.read().decode("utf-8")
+                      return None if not body else json.loads(body)
+              except urllib.error.HTTPError as exc:
+                  if expect_404 and exc.code == 404:
+                      return None
+                  message = exc.read().decode("utf-8", errors="replace")
+                  raise SystemExit(f"{method} {url} failed: {exc.code} {message}")
+
+          assets = request_json("GET", f"{api_root}/releases/{release_id}/assets") or []
+          for asset in assets:
+              if asset.get("name") == jar_name:
+                  request_json("DELETE", f"{api_root}/releases/assets/{asset['id']}")
+
+          content_type = mimetypes.guess_type(jar_name)[0] or "application/java-archive"
+          with open(jar_path, "rb") as fh:
+              binary = fh.read()
+
+          request = urllib.request.Request(
+              f"{upload_url}?name={urllib.parse.quote(jar_name)}",
+              data=binary,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": content_type,
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request) as response:
+                  json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              message = exc.read().decode("utf-8", errors="replace")
+              raise SystemExit(f"Upload release asset failed: {exc.code} {message}")
+          PY
+
+      - name: Publish to Modrinth
+        shell: bash
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+          MODRINTH_GAME_VERSIONS: ${{ vars.MODRINTH_GAME_VERSIONS }}
+          MODRINTH_LOADERS: ${{ vars.MODRINTH_LOADERS }}
+          VERSION_NUMBER: ${{ steps.meta.outputs.version }}
+          VERSION_NAME: ${{ steps.gh_release.outputs.release_name }}
+          CHANGELOG: ${{ steps.gh_release.outputs.release_body }}
+          RELEASE_TYPE: ${{ steps.meta.outputs.release_type }}
+          JAR_PATH: ${{ steps.meta.outputs.jar_path }}
+          USER_AGENT: ${{ github.repository }}/github-actions
+          RELEASE_URL: ${{ steps.gh_release.outputs.html_url }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${MODRINTH_TOKEN}" ]]; then
+            echo "Missing repository secret MODRINTH_TOKEN"
+            exit 1
+          fi
+          if [[ -z "${MODRINTH_PROJECT_ID}" ]]; then
+            echo "Missing repository variable MODRINTH_PROJECT_ID"
+            exit 1
+          fi
+
+          export MODRINTH_GAME_VERSIONS="${MODRINTH_GAME_VERSIONS:-1.21.11}"
+          export MODRINTH_LOADERS="${MODRINTH_LOADERS:-paper,purpur,spigot}"
+
+          python3 - <<'PY' > modrinth-data.json
+          import json
+          import os
+
+          def csv_env(name: str):
+              return [item.strip() for item in os.environ[name].split(",") if item.strip()]
+
+          payload = {
+              "name": os.environ["VERSION_NAME"],
+              "version_number": os.environ["VERSION_NUMBER"],
+              "changelog": (os.environ.get("CHANGELOG", "").strip() + "\n\nGitHub Release: " + os.environ["RELEASE_URL"]).strip(),
+              "dependencies": [],
+              "game_versions": csv_env("MODRINTH_GAME_VERSIONS"),
+              "version_type": os.environ["RELEASE_TYPE"],
+              "loaders": csv_env("MODRINTH_LOADERS"),
+              "project_id": os.environ["MODRINTH_PROJECT_ID"],
+              "file_parts": ["file"],
+              "primary_file": "file",
+          }
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+
+          curl --fail-with-body \
+            -H "Authorization: ${MODRINTH_TOKEN}" \
+            -H "User-Agent: ${USER_AGENT}" \
+            -F "data=@modrinth-data.json;type=application/json" \
+            -F "file=@${JAR_PATH}" \
+            https://api.modrinth.com/v2/version
