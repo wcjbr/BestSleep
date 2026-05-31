@@ -1,5 +1,5 @@
 name: BestSleep
-version: '1.0-SNAPSHOT'
+version: '2.0.0'
 main: arch.zero.bestSleep.BestSleep
 api-version: '1.21'
 softdepend:

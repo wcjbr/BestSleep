@@ -28,14 +28,13 @@ Add these repository variables:
 ## Recommended release flow
 
 1. Push code to GitHub.
-2. Update `pom.xml` to the exact release version, for example `1.0.0`.
-3. Create and push a tag like `v1.0.0`.
-4. GitHub Actions creates or updates the GitHub Release, uploads the jar, and publishes to Modrinth.
+2. Create and push a tag like `v1.0.0` or `v0.1b`.
+3. GitHub Actions creates or updates the GitHub Release, uploads the jar, and publishes to Modrinth.
 
 ## Notes
 
-- The workflow requires the pushed tag to match the `pom.xml` version exactly, for example `pom.xml: 1.0.0` and tag `v1.0.0`.
+- The workflow derives the published version from the Git tag, for example `v1.0.0` becomes `1.0.0`.
+- `pom.xml` version is used for Maven build metadata only and does not need to match the release tag.
 - `-alpha` in the version becomes Modrinth `alpha`.
 - `-beta` and `-rc` in the version become Modrinth `beta`.
-- `-SNAPSHOT` versions are rejected for release publishing.
 - If you do not provide a manual changelog override, GitHub release notes are generated automatically through the GitHub Releases API.

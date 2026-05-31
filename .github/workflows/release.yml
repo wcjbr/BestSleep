@@ -43,7 +43,6 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
-          GIT_SHA: ${{ github.sha }}
           INPUT_TAG_NAME: ${{ inputs.tag_name }}
           INPUT_CHANGELOG: ${{ inputs.changelog }}
           INPUT_RELEASE_TYPE: ${{ inputs.release_type }}
@@ -67,7 +66,7 @@ jobs:
               return value.strip()
 
           artifact_id = read_text("m:artifactId")
-          version = read_text("m:version")
+          pom_version = read_text("m:version")
           project_name = root.findtext("m:name", namespaces=ns)
           project_name = project_name.strip() if project_name and project_name.strip() else artifact_id
 
@@ -82,15 +81,12 @@ jobs:
           event_name = os.environ["EVENT_NAME"]
           pushed_tag = os.environ.get("REF_NAME", "").strip()
           input_tag = os.environ.get("INPUT_TAG_NAME", "").strip()
-          tag_name = pushed_tag if event_name == "push" else (input_tag or f"v{version}")
-
-          expected_tag = f"v{version}"
-          if event_name == "push" and tag_name != expected_tag:
-              raise SystemExit(f"Tag {tag_name} does not match pom.xml version {version}. Expected {expected_tag}.")
+          tag_name = pushed_tag if event_name == "push" else (input_tag or f"v{pom_version}")
+          version = tag_name[1:] if tag_name.startswith("v") else tag_name
+          if not version:
+              raise SystemExit(f"Cannot derive a release version from tag {tag_name!r}")
 
           version_lower = version.lower()
-          if version_lower.endswith("-snapshot"):
-              raise SystemExit("Refusing to publish a -SNAPSHOT version. Set a release version in pom.xml first.")
 
           release_type = os.environ.get("INPUT_RELEASE_TYPE", "").strip().lower()
           if not release_type:
@@ -106,10 +102,12 @@ jobs:
 
           prerelease = "true" if release_type in {"beta", "alpha"} else "false"
           release_name = f"{project_name} {version}"
+          release_jar_name = f"{artifact_id}-{version}.jar"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
               fh.write(f"artifact_id={artifact_id}\n")
               fh.write(f"project_name={project_name}\n")
+              fh.write(f"pom_version={pom_version}\n")
               fh.write(f"version={version}\n")
               fh.write(f"tag_name={tag_name}\n")
               fh.write(f"release_name={release_name}\n")
@@ -117,6 +115,7 @@ jobs:
               fh.write(f"prerelease={prerelease}\n")
               fh.write(f"jar_path={jar_path}\n")
               fh.write(f"jar_name={pathlib.Path(jar_path).name}\n")
+              fh.write(f"release_jar_name={release_jar_name}\n")
           PY
 
       - name: Create or update GitHub release
@@ -225,7 +224,7 @@ jobs:
           RELEASE_ID: ${{ steps.gh_release.outputs.release_id }}
           UPLOAD_URL: ${{ steps.gh_release.outputs.upload_url }}
           JAR_PATH: ${{ steps.meta.outputs.jar_path }}
-          JAR_NAME: ${{ steps.meta.outputs.jar_name }}
+          JAR_NAME: ${{ steps.meta.outputs.release_jar_name }}
         run: |
           set -euo pipefail
 
@@ -306,6 +305,7 @@ jobs:
           CHANGELOG: ${{ steps.gh_release.outputs.release_body }}
           RELEASE_TYPE: ${{ steps.meta.outputs.release_type }}
           JAR_PATH: ${{ steps.meta.outputs.jar_path }}
+          JAR_NAME: ${{ steps.meta.outputs.release_jar_name }}
           USER_AGENT: ${{ github.repository }}/github-actions
           RELEASE_URL: ${{ steps.gh_release.outputs.html_url }}
         run: |
@@ -326,9 +326,16 @@ jobs:
           python3 - <<'PY' > modrinth-data.json
           import json
           import os
+          import pathlib
+          import shutil
 
           def csv_env(name: str):
               return [item.strip() for item in os.environ[name].split(",") if item.strip()]
+
+          source = pathlib.Path(os.environ["JAR_PATH"])
+          target = source.with_name(os.environ["JAR_NAME"])
+          if source != target:
+              shutil.copyfile(source, target)
 
           payload = {
               "name": os.environ["VERSION_NAME"],
@@ -349,5 +356,5 @@ jobs:
             -H "Authorization: ${MODRINTH_TOKEN}" \
             -H "User-Agent: ${USER_AGENT}" \
             -F "data=@modrinth-data.json;type=application/json" \
-            -F "file=@${JAR_PATH}" \
+            -F "file=@target/${JAR_NAME}" \
             https://api.modrinth.com/v2/version

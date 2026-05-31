@@ -136,8 +136,8 @@ request-cooldown-seconds: 60
 
 发布要求：
 
-- `pom.xml` 中的版本必须是正式版本，不能是 `-SNAPSHOT`
-- tag 必须和版本一致，例如 `v1.0.0`
+- 使用 Git tag，例如 `v1.0.0` 或 `v0.1b`
+- 实际发布版本号会直接从这个 tag 推导出来
 
 相关文件：
 

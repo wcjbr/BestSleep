@@ -136,8 +136,8 @@ The repository contains GitHub Actions workflows for:
 
 Release publishing expects:
 
-- `pom.xml` version to be a real release version, not `-SNAPSHOT`
-- a tag matching the version, such as `v1.0.0`
+- a Git tag such as `v1.0.0` or `v0.1b`
+- the published version is derived from that tag
 
 Relevant files:
 
