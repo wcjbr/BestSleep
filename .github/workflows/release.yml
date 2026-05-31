@@ -293,8 +293,22 @@ jobs:
               raise SystemExit(f"Upload release asset failed: {exc.code} {message}")
           PY
 
+      - name: Check Modrinth config
+        id: modrinth
+        shell: bash
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${MODRINTH_TOKEN}" && -n "${MODRINTH_PROJECT_ID}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to Modrinth
-        if: ${{ vars.MODRINTH_PROJECT_ID != '' && secrets.MODRINTH_TOKEN != '' }}
+        if: ${{ steps.modrinth.outputs.enabled == 'true' }}
         shell: bash
         env:
           MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
@@ -353,7 +367,7 @@ jobs:
             https://api.modrinth.com/v2/version
 
       - name: Skip Modrinth publish
-        if: ${{ !(vars.MODRINTH_PROJECT_ID != '' && secrets.MODRINTH_TOKEN != '') }}
+        if: ${{ steps.modrinth.outputs.enabled != 'true' }}
         run: |
           echo "Skipping Modrinth publish."
           echo "Set repository variable MODRINTH_PROJECT_ID and secret MODRINTH_TOKEN to enable it."
