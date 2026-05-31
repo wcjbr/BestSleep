@@ -1,0 +1,11 @@
+name: BestSleep
+version: '1.0-SNAPSHOT'
+main: arch.zero.bestSleep.BestSleep
+api-version: '1.21'
+softdepend:
+  - floodgate
+commands:
+  bestsleep:
+    description: Start or respond to a group sleep request
+    usage: /bestsleep [request|accept|deny|cancel]
+    aliases: [sleepvote, groupsleep]
