@@ -294,6 +294,7 @@ jobs:
           PY
 
       - name: Publish to Modrinth
+        if: ${{ vars.MODRINTH_PROJECT_ID != '' && secrets.MODRINTH_TOKEN != '' }}
         shell: bash
         env:
           MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
@@ -310,15 +311,6 @@ jobs:
           RELEASE_URL: ${{ steps.gh_release.outputs.html_url }}
         run: |
           set -euo pipefail
-
-          if [[ -z "${MODRINTH_TOKEN}" ]]; then
-            echo "Missing repository secret MODRINTH_TOKEN"
-            exit 1
-          fi
-          if [[ -z "${MODRINTH_PROJECT_ID}" ]]; then
-            echo "Missing repository variable MODRINTH_PROJECT_ID"
-            exit 1
-          fi
 
           export MODRINTH_GAME_VERSIONS="${MODRINTH_GAME_VERSIONS:-1.21.11}"
           export MODRINTH_LOADERS="${MODRINTH_LOADERS:-paper,purpur,spigot}"
@@ -345,6 +337,7 @@ jobs:
               "game_versions": csv_env("MODRINTH_GAME_VERSIONS"),
               "version_type": os.environ["RELEASE_TYPE"],
               "loaders": csv_env("MODRINTH_LOADERS"),
+              "featured": True,
               "project_id": os.environ["MODRINTH_PROJECT_ID"],
               "file_parts": ["file"],
               "primary_file": "file",
@@ -358,3 +351,9 @@ jobs:
             -F "data=@modrinth-data.json;type=application/json" \
             -F "file=@target/${JAR_NAME}" \
             https://api.modrinth.com/v2/version
+
+      - name: Skip Modrinth publish
+        if: ${{ !(vars.MODRINTH_PROJECT_ID != '' && secrets.MODRINTH_TOKEN != '') }}
+        run: |
+          echo "Skipping Modrinth publish."
+          echo "Set repository variable MODRINTH_PROJECT_ID and secret MODRINTH_TOKEN to enable it."

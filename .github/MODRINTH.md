@@ -14,9 +14,11 @@ Add these repository variables:
 - `MODRINTH_PROJECT_ID`
   Your Modrinth project id or slug.
 - `MODRINTH_GAME_VERSIONS`
-  Comma-separated Minecraft versions, for example `1.21.11`
+  Comma-separated exact Minecraft versions, for example `1.21.11`
 - `MODRINTH_LOADERS`
   Comma-separated loaders, for example `paper,purpur,spigot`
+
+If `MODRINTH_PROJECT_ID` or `MODRINTH_TOKEN` is missing, the release workflow will skip Modrinth publishing and still complete the GitHub Release steps.
 
 ## How publishing works
 

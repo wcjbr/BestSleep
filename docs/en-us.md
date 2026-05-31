@@ -134,6 +134,10 @@ The repository contains GitHub Actions workflows for:
 - GitHub Release asset upload
 - Modrinth publishing
 
+If Modrinth repository settings are not configured, the release workflow skips Modrinth publishing and still completes the GitHub Release successfully.
+
+For `MODRINTH_GAME_VERSIONS`, use exact versions such as `1.21.11`, not ranges such as `1.21.x`.
+
 Release publishing expects:
 
 - a Git tag such as `v1.0.0` or `v0.1b`

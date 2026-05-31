@@ -134,6 +134,10 @@ request-cooldown-seconds: 60
 - 自动上传 jar 到 GitHub Release
 - 自动发布到 Modrinth
 
+如果仓库里没有配置 Modrinth 所需的 GitHub variables / secrets，工作流会跳过 Modrinth 发布，但 GitHub Release 仍然会正常完成。
+
+`MODRINTH_GAME_VERSIONS` 建议填写精确版本，例如 `1.21.11`，不要写 `1.21.x` 这种范围格式。
+
 发布要求：
 
 - 使用 Git tag，例如 `v1.0.0` 或 `v0.1b`
